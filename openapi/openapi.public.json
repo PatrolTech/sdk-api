@@ -6403,7 +6403,7 @@
           "sessionUrl": {
             "type": "string",
             "format": "uri",
-            "description": "The payment provider's checkout page. It expires after 45 minutes."
+            "description": "The payment provider's checkout page. It expires after about 23 hours."
           }
         },
         "required": [
