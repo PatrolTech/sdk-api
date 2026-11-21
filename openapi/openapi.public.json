@@ -1524,7 +1524,7 @@
             }
           },
           "422": {
-            "description": "Invalid verificationMethod config for its type (e.g. a qr_static code over 1000 bytes) or a type not implemented yet"
+            "description": "Invalid verificationMethod config for its type (e.g. a qr_static code over 1000 bytes, or VERIFICATION_CODE_IS_ACCESS_LINK when the qr_static code is a guard-app access link (`https://app.patroltech.online/…`), which the guard app never records as a scan) or a type not implemented yet"
           }
         }
       }
@@ -2102,6 +2102,16 @@
                 }
               }
             }
+          },
+          "423": {
+            "description": "GUARD_APP_BLOCKED: the guard app of this organization is blocked (a `panel_and_app` suspension is in force).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GuardAppBlockedResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -2314,6 +2324,16 @@
           },
           "404": {
             "description": "Incident not found"
+          },
+          "423": {
+            "description": "GUARD_APP_BLOCKED: the guard app of this organization is blocked (a `panel_and_app` suspension is in force).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GuardAppBlockedResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -4403,13 +4423,17 @@
             },
             "type": {
               "type": "string",
-              "description": "One of security_company, homeowners_association, maintenance_company or other."
+              "description": "One of security_company, homeowners_association, maintenance_company, other, cleaning_company or facility_services."
+            },
+            "entryVertical": {
+              "$ref": "#/components/schemas/Vertical"
             }
           },
           "required": [
             "id",
             "name",
-            "type"
+            "type",
+            "entryVertical"
           ]
         }
       },
@@ -5940,6 +5964,39 @@
           "limit"
         ]
       },
+      "GuardAppBlockedResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "enum": [
+              false
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "GUARD_APP_BLOCKED"
+                ]
+              }
+            },
+            "required": [
+              "code"
+            ]
+          }
+        },
+        "required": [
+          "success",
+          "message",
+          "data"
+        ]
+      },
       "IncidentDetailResponse": {
         "type": "object",
         "properties": {
@@ -7020,6 +7077,9 @@
               "nullable": true,
               "format": "uuid"
             },
+            "vertical": {
+              "$ref": "#/components/schemas/Vertical"
+            },
             "archivedAt": {
               "type": "string",
               "nullable": true,
@@ -7036,7 +7096,8 @@
           },
           "required": [
             "id",
-            "address"
+            "address",
+            "vertical"
           ]
         }
       },
@@ -7081,6 +7142,9 @@
             "nullable": true,
             "format": "uuid"
           },
+          "vertical": {
+            "$ref": "#/components/schemas/Vertical"
+          },
           "archivedAt": {
             "type": "string",
             "nullable": true,
@@ -7097,7 +7161,8 @@
         },
         "required": [
           "id",
-          "address"
+          "address",
+          "vertical"
         ]
       },
       "LocationConflict": {
@@ -7786,6 +7851,14 @@
           "action",
           "params"
         ]
+      },
+      "Vertical": {
+        "type": "string",
+        "enum": [
+          "security",
+          "cleaning"
+        ],
+        "description": "Business vertical of an organization or location: `security` or `cleaning`."
       },
       "PlanPricing": {
         "type": "object",
