@@ -2,7 +2,7 @@
   "openapi": "3.0.3",
   "info": {
     "title": "PatrolTech Public API",
-    "version": "2.0.1",
+    "version": "2.1.0",
     "description": "Public subset of the PatrolTech API. Breaking changes require a major version bump.\n\n2.0.0: the request property `whatsappPhone` of `PATCH /api/auth/user/preferences` is\ndeclared as what the API has always accepted (a string of 1 to 20 characters, or null);\nit was declared as any value. Nullable response fields that hold a schema reference\n(`pricing`, `usage`) are declared as `anyOf` plus `nullable`.\n\nResponse envelope for `/api/*`: every JSON response is wrapped as\n`{ success, message, data, meta? }`. The 2xx schemas below describe `data`.\nErrors arrive as `{ success: false, message, data: null, meta }`, with the details\n(`errorCode`, `code`...) in `meta` unless the handler emitted the envelope itself.\n`/oauth/*` and `/.well-known/*` follow the OAuth RFCs: plain JSON, no envelope.\n\nResponses any `/api/*` operation can return, not repeated in each operation:\n- 401: the operation needs a bearer token and it is missing, malformed, invalid\n  (`meta.code: INVALID_TOKEN`), expired (`meta.code: TOKEN_EXPIRED`) or of a deleted\n  account (`meta.errorCode: ACCOUNT_DELETED`). Get a new token and retry.\n- 423: the organization the request targets (or all of the user’s organizations) is\n  suspended. The body is the envelope with `data: { code: ORGANIZATION_SUSPENDED,\n  organizationId, reason, scope, effectiveAt }`. Billing and account endpoints stay open.\n- 451: on a write (POST, PUT, PATCH, DELETE), the user has policies pending acceptance;\n  `meta.pending` lists them. Accept them in the dashboard and retry.\n- 429: too many requests for that endpoint. Wait and retry.\n- 500: unexpected server error. 502: a provider the operation depends on (payments)\n  failed; the operations where it can happen document it.\n\nWebhooks are in development. Tell us which events you need at info@patroltech.app;\nmeanwhile, poll the list endpoints.",
     "contact": {
       "name": "PatrolTech",
@@ -1524,7 +1524,7 @@
             }
           },
           "422": {
-            "description": "Invalid verificationMethod config for its type (e.g. a qr_static code over 1000 bytes) or a type not implemented yet"
+            "description": "Invalid verificationMethod config for its type (e.g. a qr_static code over 1000 bytes, or VERIFICATION_CODE_IS_ACCESS_LINK when the qr_static code is a link of the guard app itself (its organization, login or install links), which the team app never records as a scan) or a type not implemented yet"
           }
         }
       }
@@ -2094,11 +2094,27 @@
         ],
         "responses": {
           "200": {
-            "description": "Incidents list",
+            "description": "Incidents list. Without `locationId`, only the incidents of the locations of the vertical the request is made for (the `X-Client-Name` prefix or the `Origin` host; without either, the organization's `entryVertical`): in an organization with locations of both verticals, each client lists its own.",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/IncidentsListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query, or the request names two different locations (in the query and the body, or `locationId` repeated)"
+          },
+          "403": {
+            "description": "The incident-reporting feature is off for the operation's location (without a location, in every location of the vertical the request declares), the caller's role is not enough, or a patroller token names another organization"
+          },
+          "423": {
+            "description": "GUARD_APP_BLOCKED: the guard app of this organization is blocked (a `panel_and_app` suspension is in force).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GuardAppBlockedResponse"
                 }
               }
             }
@@ -2110,7 +2126,7 @@
       "get": {
         "operationId": "getIncidentDetail",
         "summary": "Get full incident detail including timeline and media",
-        "description": "Send `locationId` or `organizationId` in the query so that access and the incident-reporting feature are checked against the incident's own location or organization. Both are optional; if both are sent, `locationId` wins. Without either, the first organization of the caller is used, which can refuse an incident of another organization (403).",
+        "description": "Access and the incident-reporting feature are checked on the incident's own location: the caller's role there (organization-wide or on that location) and the feature as resolved for that location. `locationId` and `organizationId` are optional; if sent, they must be the incident's. An incident that does not exist, one where the caller has no role on its location, and a request naming another organization or location all answer 404, so they cannot be told apart. An incident of a suspended organization of the caller answers 423 (`ORGANIZATION_SUSPENDED`).",
         "security": [
           {
             "bearerAuth": []
@@ -2130,10 +2146,10 @@
             "schema": {
               "type": "string",
               "format": "uuid",
-              "description": "Location the incident belongs to. When sent, the organization is taken from this location (`organizationId` is ignored) and access is checked with the caller's role on it."
+              "description": "Optional. If sent, it must be the incident's own location; any other answers 404."
             },
             "required": false,
-            "description": "Location the incident belongs to. When sent, the organization is taken from this location (`organizationId` is ignored) and access is checked with the caller's role on it.",
+            "description": "Optional. If sent, it must be the incident's own location; any other answers 404.",
             "name": "locationId",
             "in": "query"
           },
@@ -2141,10 +2157,10 @@
             "schema": {
               "type": "string",
               "format": "uuid",
-              "description": "Organization the incident belongs to, for a caller with access to several organizations. Ignored when `locationId` is sent."
+              "description": "Optional. If sent, it must be the incident's own organization; any other answers 404."
             },
             "required": false,
-            "description": "Organization the incident belongs to, for a caller with access to several organizations. Ignored when `locationId` is sent.",
+            "description": "Optional. If sent, it must be the incident's own organization; any other answers 404.",
             "name": "organizationId",
             "in": "query"
           }
@@ -2160,8 +2176,14 @@
               }
             }
           },
+          "403": {
+            "description": "The incident-reporting feature is off for the operation's location (without a location, in every location of the vertical the request declares), the caller's role is not enough, or a patroller token names another organization"
+          },
           "404": {
-            "description": "Incident not found"
+            "description": "Incident not found: it does not exist, the caller has no role on its location, or the request names another organization or location (the three answer the same)"
+          },
+          "423": {
+            "description": "ORGANIZATION_SUSPENDED: the incident belongs to one of the caller's organizations and that organization is suspended. It is checked on the incident's organization even when the request names none. Same body as any other 423 (see the contract description)."
           }
         }
       }
@@ -2170,7 +2192,7 @@
       "patch": {
         "operationId": "updateIncidentStatus",
         "summary": "Update the status of an incident",
-        "description": "Send `locationId` or `organizationId` in the query so that access and the incident-reporting feature are checked against the incident's own location or organization. Both are optional; if both are sent, `locationId` wins. Without either, the first organization of the caller is used, which can refuse an incident of another organization (403).",
+        "description": "Access and the incident-reporting feature are checked on the incident's own location: the caller's role there (organization-wide or on that location) and the feature as resolved for that location. `locationId` and `organizationId` are optional; if sent, they must be the incident's. An incident that does not exist, one where the caller has no role on its location, and a request naming another organization or location all answer 404, so they cannot be told apart. An incident of a suspended organization of the caller answers 423 (`ORGANIZATION_SUSPENDED`).",
         "security": [
           {
             "bearerAuth": []
@@ -2190,10 +2212,10 @@
             "schema": {
               "type": "string",
               "format": "uuid",
-              "description": "Location the incident belongs to. When sent, the organization is taken from this location (`organizationId` is ignored) and access is checked with the caller's role on it."
+              "description": "Optional. If sent, it must be the incident's own location; any other answers 404."
             },
             "required": false,
-            "description": "Location the incident belongs to. When sent, the organization is taken from this location (`organizationId` is ignored) and access is checked with the caller's role on it.",
+            "description": "Optional. If sent, it must be the incident's own location; any other answers 404.",
             "name": "locationId",
             "in": "query"
           },
@@ -2201,10 +2223,10 @@
             "schema": {
               "type": "string",
               "format": "uuid",
-              "description": "Organization the incident belongs to, for a caller with access to several organizations. Ignored when `locationId` is sent."
+              "description": "Optional. If sent, it must be the incident's own organization; any other answers 404."
             },
             "required": false,
-            "description": "Organization the incident belongs to, for a caller with access to several organizations. Ignored when `locationId` is sent.",
+            "description": "Optional. If sent, it must be the incident's own organization; any other answers 404.",
             "name": "organizationId",
             "in": "query"
           }
@@ -2240,8 +2262,14 @@
           "400": {
             "description": "Invalid status transition or missing required comment"
           },
+          "403": {
+            "description": "The incident-reporting feature is off for the operation's location (without a location, in every location of the vertical the request declares), the caller's role is not enough, or a patroller token names another organization"
+          },
           "404": {
-            "description": "Incident not found"
+            "description": "Incident not found: it does not exist, the caller has no role on its location, or the request names another organization or location (the three answer the same)"
+          },
+          "423": {
+            "description": "ORGANIZATION_SUSPENDED: the incident belongs to one of the caller's organizations and that organization is suspended. It is checked on the incident's organization even when the request names none. Same body as any other 423 (see the contract description)."
           }
         }
       }
@@ -2250,7 +2278,7 @@
       "post": {
         "operationId": "addIncidentComment",
         "summary": "Add a comment to an incident",
-        "description": "Send `locationId` or `organizationId` in the query so that access and the incident-reporting feature are checked against the incident's own location or organization. Both are optional; if both are sent, `locationId` wins. Without either, the first organization of the caller is used, which can refuse an incident of another organization (403).",
+        "description": "Access and the incident-reporting feature are checked on the incident's own location: the caller's role there (organization-wide or on that location) and the feature as resolved for that location. `locationId` and `organizationId` are optional; if sent, they must be the incident's. An incident that does not exist, one where the caller has no role on its location, and a request naming another organization or location all answer 404, so they cannot be told apart. An incident of a suspended organization of the caller answers 423 (`ORGANIZATION_SUSPENDED`).",
         "security": [
           {
             "bearerAuth": []
@@ -2270,10 +2298,10 @@
             "schema": {
               "type": "string",
               "format": "uuid",
-              "description": "Location the incident belongs to. When sent, the organization is taken from this location (`organizationId` is ignored) and access is checked with the caller's role on it."
+              "description": "Optional. If sent, it must be the incident's own location; any other answers 404."
             },
             "required": false,
-            "description": "Location the incident belongs to. When sent, the organization is taken from this location (`organizationId` is ignored) and access is checked with the caller's role on it.",
+            "description": "Optional. If sent, it must be the incident's own location; any other answers 404.",
             "name": "locationId",
             "in": "query"
           },
@@ -2281,10 +2309,10 @@
             "schema": {
               "type": "string",
               "format": "uuid",
-              "description": "Organization the incident belongs to, for a caller with access to several organizations. Ignored when `locationId` is sent."
+              "description": "Optional. If sent, it must be the incident's own organization; any other answers 404."
             },
             "required": false,
-            "description": "Organization the incident belongs to, for a caller with access to several organizations. Ignored when `locationId` is sent.",
+            "description": "Optional. If sent, it must be the incident's own organization; any other answers 404.",
             "name": "organizationId",
             "in": "query"
           }
@@ -2312,8 +2340,21 @@
           "400": {
             "description": "Validation error"
           },
+          "403": {
+            "description": "The incident-reporting feature is off for the operation's location (without a location, in every location of the vertical the request declares), the caller's role is not enough, or a patroller token names another organization"
+          },
           "404": {
-            "description": "Incident not found"
+            "description": "Incident not found: it does not exist, the caller has no role on its location, or the request names another organization or location (the three answer the same)"
+          },
+          "423": {
+            "description": "With a guard app token, GUARD_APP_BLOCKED: the guard app of this organization is blocked (a `panel_and_app` suspension is in force). With a dashboard token, ORGANIZATION_SUSPENDED: the incident belongs to one of the caller's organizations and that organization is suspended. It is checked on the incident's organization even when the request names none. Same body as any other 423 (see the contract description).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GuardAppBlockedResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -2322,7 +2363,7 @@
       "patch": {
         "operationId": "assignIncident",
         "summary": "Assign or unassign an incident to a user",
-        "description": "Send `locationId` or `organizationId` in the query so that access and the incident-reporting feature are checked against the incident's own location or organization. Both are optional; if both are sent, `locationId` wins. Without either, the first organization of the caller is used, which can refuse an incident of another organization (403).",
+        "description": "Access and the incident-reporting feature are checked on the incident's own location: the caller's role there (organization-wide or on that location) and the feature as resolved for that location. `locationId` and `organizationId` are optional; if sent, they must be the incident's. An incident that does not exist, one where the caller has no role on its location, and a request naming another organization or location all answer 404, so they cannot be told apart. An incident of a suspended organization of the caller answers 423 (`ORGANIZATION_SUSPENDED`).",
         "security": [
           {
             "bearerAuth": []
@@ -2342,10 +2383,10 @@
             "schema": {
               "type": "string",
               "format": "uuid",
-              "description": "Location the incident belongs to. When sent, the organization is taken from this location (`organizationId` is ignored) and access is checked with the caller's role on it."
+              "description": "Optional. If sent, it must be the incident's own location; any other answers 404."
             },
             "required": false,
-            "description": "Location the incident belongs to. When sent, the organization is taken from this location (`organizationId` is ignored) and access is checked with the caller's role on it.",
+            "description": "Optional. If sent, it must be the incident's own location; any other answers 404.",
             "name": "locationId",
             "in": "query"
           },
@@ -2353,10 +2394,10 @@
             "schema": {
               "type": "string",
               "format": "uuid",
-              "description": "Organization the incident belongs to, for a caller with access to several organizations. Ignored when `locationId` is sent."
+              "description": "Optional. If sent, it must be the incident's own organization; any other answers 404."
             },
             "required": false,
-            "description": "Organization the incident belongs to, for a caller with access to several organizations. Ignored when `locationId` is sent.",
+            "description": "Optional. If sent, it must be the incident's own organization; any other answers 404.",
             "name": "organizationId",
             "in": "query"
           }
@@ -2392,8 +2433,14 @@
           "400": {
             "description": "Invalid body, or meta.errorCode ASSIGNEE_NOT_IN_ORGANIZATION: the assignee has no role in the incident's organization"
           },
+          "403": {
+            "description": "The incident-reporting feature is off for the operation's location (without a location, in every location of the vertical the request declares), the caller's role is not enough, or a patroller token names another organization"
+          },
           "404": {
-            "description": "Incident not found"
+            "description": "Incident not found: it does not exist, the caller has no role on its location, or the request names another organization or location (the three answer the same)"
+          },
+          "423": {
+            "description": "ORGANIZATION_SUSPENDED: the incident belongs to one of the caller's organizations and that organization is suspended. It is checked on the incident's organization even when the request names none. Same body as any other 423 (see the contract description)."
           }
         }
       }
@@ -2446,7 +2493,7 @@
       "post": {
         "operationId": "createCheckoutSession",
         "summary": "Open a checkout with the payment provider for an organization that does not pay yet",
-        "description": "The organization goes in the `organizationId` query parameter or in the `x-organization-id` header: one of them is required (400 ORGANIZATION_ID_REQUIRED otherwise) and, if both are sent, the query parameter wins. For compatibility, `organizationId` in the body is also accepted and takes precedence over both. ADMIN. Only for organizations without a live subscription: one that already pays changes plan from the dashboard. Creating the session charges nothing: payment happens on the provider's page and the plan is activated once paid. If the organization already has more checkpoints than the plan includes, the session also charges the extra ones.",
+        "description": "The organization goes in the `organizationId` query parameter or in the `x-organization-id` header: one of them is required (400 ORGANIZATION_ID_REQUIRED otherwise) and, if both are sent, the query parameter wins. For compatibility, `organizationId` in the body is also accepted and takes precedence over both. ADMIN. Only for organizations without a live subscription: one that already pays changes plan from the dashboard. Creating the session charges nothing: payment happens on the provider's page and the plan is activated once paid. If the organization already has more checkpoints than the plan includes, the session also charges the extra ones. Sites and managers have no extras: a plan that does not include the ones it already has is refused (409 PLAN_LIMITS_EXCEEDED); Business, the top plan, is never refused.",
         "security": [
           {
             "bearerAuth": []
@@ -2507,7 +2554,7 @@
             "description": "ORGANIZATION_NOT_FOUND or LICENSE_TIER_NOT_FOUND"
           },
           "409": {
-            "description": "ALREADY_SUBSCRIBED: the organization already pays a subscription and no second one is opened; change the plan from the dashboard. BILLING_BUSY (the billing of the customer is being updated: retry in a few seconds) or LICENSE_CONCURRENT_MODIFICATION (another process changed the license at the same time: retry)"
+            "description": "ALREADY_SUBSCRIBED: the organization already pays a subscription and no second one is opened; change the plan from the dashboard. PLAN_LIMITS_EXCEEDED: the organization has more sites or managers than the plan includes (e.g. Pro with more than 3 sites or 5 managers); choose a bigger plan. BILLING_BUSY (the billing of the customer is being updated: retry in a few seconds) or LICENSE_CONCURRENT_MODIFICATION (another process changed the license at the same time: retry)"
           },
           "502": {
             "description": "BILLING_PROVIDER_ERROR: the payment provider refused (or did not answer) the request. Nothing was charged; an earlier checkout session may have been closed. It can be retried."
@@ -4403,13 +4450,17 @@
             },
             "type": {
               "type": "string",
-              "description": "One of security_company, homeowners_association, maintenance_company or other."
+              "description": "One of security_company, homeowners_association, maintenance_company, other, cleaning_company or facility_services."
+            },
+            "entryVertical": {
+              "$ref": "#/components/schemas/Vertical"
             }
           },
           "required": [
             "id",
             "name",
-            "type"
+            "type",
+            "entryVertical"
           ]
         }
       },
@@ -5940,6 +5991,39 @@
           "limit"
         ]
       },
+      "GuardAppBlockedResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "enum": [
+              false
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "GUARD_APP_BLOCKED"
+                ]
+              }
+            },
+            "required": [
+              "code"
+            ]
+          }
+        },
+        "required": [
+          "success",
+          "message",
+          "data"
+        ]
+      },
       "IncidentDetailResponse": {
         "type": "object",
         "properties": {
@@ -6487,6 +6571,19 @@
               "cancelAtPeriodEnd": {
                 "type": "boolean"
               },
+              "bonusOrigin": {
+                "type": "string",
+                "nullable": true,
+                "enum": [
+                  "trial",
+                  "extension",
+                  "second_trial",
+                  "grace",
+                  "courtesy",
+                  null
+                ],
+                "description": "Why the licence is a `bonus` (null otherwise): `trial` is the 14-day Business trial given at signup (or the 7-day launch trial), `extension` and `second_trial` are granted by an operator, `grace` is a few days of margin on the current plan for an account over the free limits, `courtesy` is any other manual grant. A trial, its extension and a second trial are always on the Business plan; all but a courtesy end on `currentPeriodEnd`."
+              },
               "metadata": {
                 "type": "object",
                 "nullable": true,
@@ -6513,6 +6610,7 @@
               "currentPeriodStart",
               "currentPeriodEnd",
               "cancelAtPeriodEnd",
+              "bonusOrigin",
               "metadata",
               "createdAt",
               "updatedAt"
@@ -6582,11 +6680,17 @@
             ]
           },
           "isTrialActive": {
-            "type": "boolean"
+            "type": "boolean",
+            "description": "True while the organization is in a trial that has not ended: the 14-day Business trial (a `bonus` licence whose `bonusOrigin` is `trial`, `extension` or `second_trial`) or a payment-provider trial (status `trial`)."
+          },
+          "isBusinessTrial": {
+            "type": "boolean",
+            "description": "True while the licence is on the Business trial and it has not ended: a `bonus` on the Business plan whose `bonusOrigin` is `trial`, `extension` or `second_trial`, before its end date (the backend rule). Clients read this instead of deriving it from the origin."
           },
           "trialDaysRemaining": {
             "type": "number",
-            "nullable": true
+            "nullable": true,
+            "description": "Whole days left in the active trial (rounded up, never negative); null when not in a trial."
           },
           "canUpgradeTo": {
             "type": "array",
@@ -6662,6 +6766,10 @@
             ],
             "nullable": true
           },
+          "exceedsFreeAllowance": {
+            "type": "boolean",
+            "description": "True when what the organization uses (checkpoints, locations or managers) is over the Free plan limits, whatever plan or bonus it has now. It does not mean the organization is blocked: a block applies only on the Free plan with no subscription and no running bonus. False when it pays a subscription that renews; a subscription set to cancel at period end counts, since it goes back to Free when the period ends."
+          },
           "currency": {
             "type": "string",
             "enum": [
@@ -6678,9 +6786,11 @@
           "license",
           "tier",
           "isTrialActive",
+          "isBusinessTrial",
           "trialDaysRemaining",
           "canUpgradeTo",
           "usage",
+          "exceedsFreeAllowance",
           "currency",
           "hasActiveSubscription"
         ]
@@ -7020,6 +7130,9 @@
               "nullable": true,
               "format": "uuid"
             },
+            "vertical": {
+              "$ref": "#/components/schemas/Vertical"
+            },
             "archivedAt": {
               "type": "string",
               "nullable": true,
@@ -7036,7 +7149,8 @@
           },
           "required": [
             "id",
-            "address"
+            "address",
+            "vertical"
           ]
         }
       },
@@ -7081,6 +7195,9 @@
             "nullable": true,
             "format": "uuid"
           },
+          "vertical": {
+            "$ref": "#/components/schemas/Vertical"
+          },
           "archivedAt": {
             "type": "string",
             "nullable": true,
@@ -7097,7 +7214,8 @@
         },
         "required": [
           "id",
-          "address"
+          "address",
+          "vertical"
         ]
       },
       "LocationConflict": {
@@ -7786,6 +7904,14 @@
           "action",
           "params"
         ]
+      },
+      "Vertical": {
+        "type": "string",
+        "enum": [
+          "security",
+          "cleaning"
+        ],
+        "description": "Business vertical of an organization or location: `security` or `cleaning`."
       },
       "PlanPricing": {
         "type": "object",
